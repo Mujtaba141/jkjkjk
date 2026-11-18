@@ -1,0 +1,32 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const zlib = require('node:zlib');
+const crypto = require('node:crypto');
+const zip = fs.readFileSync(path.join(__dirname, 'website.zip'));
+if (crypto.createHash('sha256').update(zip).digest('hex') !== '1f00dcd60d4824ffd08bd180477cfeaae509cc46950d52a809c23f289cee71fe') throw new Error('Website archive changed or incomplete.');
+const end = zip.length - 22;
+if (zip.readUInt32LE(end) !== 0x06054b50) throw new Error('Invalid archive.');
+const count = zip.readUInt16LE(end + 10);
+let cursor = zip.readUInt32LE(end + 16);
+const root = path.join(__dirname, 'public');
+fs.mkdirSync(root, {recursive: true});
+for (let i = 0; i < count; i++) {
+  if (zip.readUInt32LE(cursor) !== 0x02014b50) throw new Error('Invalid file entry.');
+  const method = zip.readUInt16LE(cursor + 10), size = zip.readUInt32LE(cursor + 20);
+  const expectedSize = zip.readUInt32LE(cursor + 24), nameSize = zip.readUInt16LE(cursor + 28);
+  const extraSize = zip.readUInt16LE(cursor + 30), commentSize = zip.readUInt16LE(cursor + 32);
+  const offset = zip.readUInt32LE(cursor + 42);
+  const name = zip.subarray(cursor + 46, cursor + 46 + nameSize).toString('utf8');
+  if (name.includes('\\') || name.startsWith('/') || name.split('/').some(p => p === '..' || p.includes(':'))) throw new Error('Unsafe filename.');
+  const target = path.resolve(root, name);
+  if (!target.startsWith(root + path.sep)) throw new Error('Invalid destination.');
+  if (zip.readUInt32LE(offset) !== 0x04034b50) throw new Error('Invalid file header.');
+  const start = offset + 30 + zip.readUInt16LE(offset + 26) + zip.readUInt16LE(offset + 28);
+  const compressed = zip.subarray(start, start + size);
+  const content = method === 8 ? zlib.inflateRawSync(compressed) : method === 0 ? compressed : null;
+  if (!content || content.length !== expectedSize) throw new Error('Invalid file contents.');
+  fs.mkdirSync(path.dirname(target), {recursive: true});
+  fs.writeFileSync(target, content);
+  cursor += 46 + nameSize + extraSize + commentSize;
+}
+console.log(`Demo ready: ${count} files extracted into public.`);
